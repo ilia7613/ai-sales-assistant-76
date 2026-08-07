@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
+    const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -29,6 +30,14 @@ export async function POST(request: Request) {
 
     const response = await client.responses.create({
       model: "gpt-5.6",
+      tools: vectorStoreId
+  ? [
+      {
+        type: "file_search",
+        vector_store_ids: [vectorStoreId],
+      },
+    ]
+  : [],
   instructions: `
 Ты профессиональный ИИ-продавец ветеринарного медицинского оборудования.
 
