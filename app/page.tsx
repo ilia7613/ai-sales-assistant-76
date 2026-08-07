@@ -5,6 +5,9 @@ import { FormEvent, useState } from "react";
 export default function Home() {
   const [message, setMessage] = useState("");
   const [reply, setReply] = useState("");
+  const [history, setHistory] = useState<
+  { role: "user" | "assistant"; content: string }[]
+>([]);
   const [loading, setLoading] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +27,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, history }),
       });
 
       const data = await response.json();
@@ -34,6 +37,11 @@ export default function Home() {
       }
 
       setReply(data.reply);
+      setHistory((prev) => [
+  ...prev,
+  { role: "user", content: message },
+  { role: "assistant", content: data.reply },
+]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Произошла ошибка");
     } finally {

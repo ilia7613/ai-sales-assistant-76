@@ -18,6 +18,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const message =
       typeof body?.message === "string" ? body.message.trim() : "";
+      const history = Array.isArray(body?.history) ? body.history : [];
 
     if (!message) {
       return NextResponse.json(
@@ -55,7 +56,10 @@ export async function POST(request: Request) {
 9. Отвечай достаточно кратко — как хороший менеджер в живом диалоге.
 
 Главная цель: понять потребность клиента, помочь подобрать оптимальное ветеринарное оборудование и аккуратно привести разговор к следующему шагу продажи.`,
-      input: message,
+      input: [
+  ...history,
+  { role: "user", content: message },
+],
     });
 
     const reply = response.output_text?.trim();
