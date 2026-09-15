@@ -1,24 +1,50 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import {
+  generateReply,
+  type ConversationMessage,
+} from "@/lib/server/consultant/service";
 
 export const runtime = "nodejs";
 
+const MAX_HISTORY_MESSAGES = 100;
+const MAX_MESSAGE_LENGTH = 10_000;
+
+function isConversationMessage(value: unknown): value is ConversationMessage {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const entry = value as Record<string, unknown>;
+  return (
+    (entry.role === "user" || entry.role === "assistant") &&
+    typeof entry.content === "string" &&
+    entry.content.length <= MAX_MESSAGE_LENGTH
+  );
+}
+
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
-
-    if (!apiKey) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
       return NextResponse.json(
-        { error: "OPENAI_API_KEY is missing" },
-        { status: 500 }
+        { error: "Invalid JSON body" },
+        { status: 400 }
       );
     }
 
-    const body = await request.json();
-    const message =
-      typeof body?.message === "string" ? body.message.trim() : "";
-      const history = Array.isArray(body?.history) ? body.history : [];
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return NextResponse.json(
+        { error: "Body must be an object" },
+        { status: 400 }
+      );
+    }
+
+    const payload = body as Record<string, unknown>;
+    const rawMessage =
+      typeof payload.message === "string" ? payload.message : "";
+    const message = rawMessage.trim();
 
     if (!message) {
       return NextResponse.json(
@@ -27,49 +53,31 @@ export async function POST(request: Request) {
       );
     }
 
-    const client = new OpenAI({ apiKey });
-
-    const response = await client.responses.create({
-      model: "gpt-5.6",
-      tools: vectorStoreId
-  ? [
-      {
-        type: "file_search",
-        vector_store_ids: [vectorStoreId],
-      },
-    ]
-  : [],
-  instructions: `
-Ты профессиональный ИИ-продавец ветеринарного медицинского оборудования.
-
-Твоя задача — не просто отвечать на вопросы, а помогать клиенту подобрать подходящее оборудование и вести его к покупке.
-
-Правила работы:
-1. Общайся на русском языке естественно, профессионально и дружелюбно.
-2. Сначала выясняй потребность клиента: какое оборудование ему нужно, для какой клиники и какие задачи он хочет решать.
-3. Задавай не больше одного-двух вопросов за раз.
-4. Не придумывай характеристики, цены, наличие или модели, если у тебя нет точной информации.
-5. Если информации недостаточно — честно скажи об этом и уточни детали.
-6. Объясняй сложные характеристики простыми словами и через пользу для клиники.
-7. Не дави на клиента. Помогай ему принять решение как опытный консультант.
-8. Когда потребность понятна, предложи следующий шаг: подбор модели, консультацию, демонстрацию или коммерческое предложение.
-9. Отвечай достаточно кратко — как хороший менеджер в живом диалоге.
-
-Главная цель: понять потребность клиента, помочь подобрать оптимальное ветеринарное оборудование и аккуратно привести разговор к следующему шагу продажи.`,
-      input: [
-  ...history,
-  { role: "user", content: message },
-],
-    });
-
-    const reply = response.output_text?.trim();
-
-    if (!reply) {
+    if (rawMessage.length > MAX_MESSAGE_LENGTH) {
       return NextResponse.json(
-        { error: "OpenAI returned an empty response" },
-        { status: 500 }
+        { error: `Message must not exceed ${MAX_MESSAGE_LENGTH} characters` },
+        { status: 400 }
       );
     }
+
+    const history = payload.history === undefined ? [] : payload.history;
+    if (
+      !Array.isArray(history) ||
+      history.length > MAX_HISTORY_MESSAGES ||
+      !history.every(isConversationMessage)
+    ) {
+      return NextResponse.json(
+        {
+          error: `History must contain at most ${MAX_HISTORY_MESSAGES} user/assistant messages with string content up to ${MAX_MESSAGE_LENGTH} characters`,
+        },
+        { status: 400 }
+      );
+    }
+
+    const reply = await generateReply({
+      message,
+      history: history.map(({ role, content }) => ({ role, content })),
+    });
 
     return NextResponse.json({ reply });
   } catch (error) {
