@@ -1,6 +1,8 @@
 import "server-only";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses";
 
+export const CONSULTANT_MODEL = "gpt-5.6";
+
 export function getConsultantConfig() {
   const apiKey = process.env.OPENAI_API_KEY;
   const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
@@ -13,5 +15,5 @@ export function getConsultantConfig() {
     ? [{ type: "file_search", vector_store_ids: [vectorStoreId] }]
     : [];
 
-  return { apiKey, model: "gpt-5.6", tools };
+  return { apiKey, model: CONSULTANT_MODEL, tools };
 }

@@ -13,6 +13,34 @@ type GenerateReplyInput = {
   history: ConversationMessage[];
 };
 
+export type StreamReplyInput = {
+  input: ConversationMessage[];
+  maxOutputTokens: number;
+  signal?: AbortSignal;
+};
+
+export async function streamReply({
+  input,
+  maxOutputTokens,
+  signal,
+}: StreamReplyInput) {
+  const { apiKey, model, tools } = getConsultantConfig();
+  const client = new OpenAI({ apiKey });
+
+  return client.responses.create(
+    {
+      model,
+      tools,
+      instructions: consultantInstructions,
+      input,
+      stream: true,
+      store: false,
+      max_output_tokens: maxOutputTokens,
+    },
+    { signal, maxRetries: 0, timeout: 60_000 }
+  );
+}
+
 export async function generateReply({ message, history }: GenerateReplyInput) {
   const { apiKey, model, tools } = getConsultantConfig();
   const client = new OpenAI({ apiKey });
