@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const stream = await streamReply({ ...input, signal: request.signal });
     return new Response(createResponsesSSE(stream, request.signal), {
       headers: {
-        "Content-Type": "text/event-stream",
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-store",
       },
     });

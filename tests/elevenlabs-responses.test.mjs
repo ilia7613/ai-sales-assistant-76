@@ -149,13 +149,31 @@ test("SSE preserves event names, sequence numbers, deltas and completion", async
   const upstream = source(events);
   const h = createHarness({ create: () => upstream });
   const response = await h.load(routePath).POST(request());
-  assert.equal(response.headers.get("content-type"), "text/event-stream");
+  assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(upstream.pulls, 0, "must not drain the upstream without downstream demand");
   const body = await response.text();
   assert.deepEqual(parseSSE(body), events);
   assert.ok(!body.includes("choices"));
   assert.ok(upstream.controller.signal.aborted);
+});
+
+test("SSE transmits Russian text as valid UTF-8 across byte boundaries", async () => {
+  const russian = "Здравствуйте! Подберём оборудование для вашей клиники.";
+  const delta = { ...events[6], delta: russian };
+  const h = createHarness({ create: () => source([delta, events.at(-1)]) });
+  const response = await h.load(routePath).POST(request());
+  assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let decoded = "";
+  // Split even multibyte Cyrillic characters to simulate arbitrary network chunks.
+  for (const byte of bytes) {
+    decoded += decoder.decode(Uint8Array.of(byte), { stream: true });
+  }
+  decoded += decoder.decode();
+  assert.deepEqual(parseSSE(decoded), [delta, events.at(-1)]);
+  assert.ok(Buffer.from(bytes).includes(Buffer.from(russian, "utf8")));
 });
 
 test("HTTP errors do not expose provider details", async () => {
