@@ -119,6 +119,27 @@ for (const [name, changes] of [
   });
 }
 
+for (const [changes, message] of [
+  [{ private_field: "PRIVATE_FIELD_TEST_MARKER" }, "Unsupported request fields"],
+  [{ model: "PRIVATE_MODEL_TEST_MARKER" }, "Unsupported model"],
+  [{ tools: [{ type: "function", name: "PRIVATE_TOOL_TEST_MARKER" }] }, "Client-provided tools are not supported"],
+]) {
+  test(`validation warning contains only message and status: ${message}`, async () => {
+    const h = createHarness();
+    const response = await h.load(routePath).POST(request({
+      ...valid,
+      input: "PRIVATE_CONVERSATION_TEST_MARKER",
+      ...changes,
+    }));
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { error: { message } });
+    assert.equal(h.calls.length, 0);
+    // Exact arguments exclude body, headers, credentials, stack and input values.
+    assert.deepEqual(copy(h.warnings), [[{ message, status: 400 }]]);
+  });
+}
+
 test("normalized context uses only our model, instructions and file_search", async () => {
   const h = createHarness({ create: () => source(events) });
   const response = await h.load(routePath).POST(request({
@@ -154,6 +175,7 @@ test("SSE preserves event names, sequence numbers, deltas and completion", async
   assert.equal(upstream.pulls, 0, "must not drain the upstream without downstream demand");
   const body = await response.text();
   assert.deepEqual(parseSSE(body), events);
+  assert.deepEqual(h.warnings, []);
   assert.ok(!body.includes("choices"));
   assert.ok(upstream.controller.signal.aborted);
 });
@@ -180,6 +202,7 @@ test("HTTP errors do not expose provider details", async () => {
   const h = createHarness({ create: () => { throw new Error(upstreamDetail); } });
   const response = await h.load(routePath).POST(request());
   assert.equal(response.status, 502);
+  assert.deepEqual(h.warnings, []);
   assert.ok(!(await response.text()).includes(upstreamDetail));
 });
 

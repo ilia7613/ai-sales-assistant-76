@@ -40,6 +40,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof RequestValidationError) {
+      console.warn({ message: error.message, status: error.status });
       return errorResponse(error.message, error.status);
     }
     return errorResponse("Unable to generate a response", 502);

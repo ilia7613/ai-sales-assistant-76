@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 // Compile the real TypeScript in memory. Never load Next's env loader or real API clients.
 export function createHarness({ create, secret = "test-only-secret" } = {}) {
   const calls = [];
+  const warnings = [];
   const env = {
     ELEVENLABS_CUSTOM_LLM_SECRET: secret,
     OPENAI_API_KEY: "test-only-key",
@@ -44,9 +45,10 @@ export function createHarness({ create, secret = "test-only-secret" } = {}) {
         throw new Error("Unexpected test import");
       },
       process: { env },
+      console: { warn: (...args) => warnings.push(args) },
       Response, Request, Headers, ReadableStream, TextEncoder, TextDecoder, AbortController,
     }, { filename });
     return compiledModule.exports;
   }
-  return { load, calls, env };
+  return { load, calls, env, warnings };
 }
