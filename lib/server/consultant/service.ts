@@ -1,5 +1,6 @@
 import "server-only";
 import OpenAI from "openai";
+import type { ResponseInput } from "openai/resources/responses/responses";
 import { getConsultantConfig } from "./config";
 import { consultantInstructions } from "./prompt";
 
@@ -14,7 +15,7 @@ type GenerateReplyInput = {
 };
 
 export type StreamReplyInput = {
-  input: ConversationMessage[];
+  input: ResponseInput;
   maxOutputTokens: number;
   signal?: AbortSignal;
 };

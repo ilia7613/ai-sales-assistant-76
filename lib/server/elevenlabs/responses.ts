@@ -1,4 +1,5 @@
 import "server-only";
+import type { ResponseReasoningItem } from "openai/resources/responses/responses";
 import { CONSULTANT_MODEL } from "../consultant/config";
 import type { ConversationMessage } from "../consultant/service";
 
@@ -7,7 +8,7 @@ const MAX_MESSAGES = 100;
 const MAX_TEXT_LENGTH = 10_000;
 const MAX_OUTPUT_TOKENS = 4096;
 
-// Diagnostic labels only; these items remain rejected by the validator.
+// Diagnostic labels only; unsupported items remain rejected by the validator.
 const SAFE_INPUT_ITEM_TYPES = new Set([
   "reasoning", "item_reference", "file_search_call", "web_search_call",
   "function_call", "function_call_output", "computer_call", "computer_call_output",
@@ -25,7 +26,7 @@ export class RequestValidationError extends Error {
 }
 
 export type ElevenLabsResponsesRequest = {
-  input: ConversationMessage[];
+  input: (ConversationMessage | ResponseReasoningItem)[];
   maxOutputTokens: number;
 };
 
@@ -53,6 +54,48 @@ function content(value: unknown): string {
   }).join(""));
 }
 
+function reasoningItem(item: Record<string, unknown>): ResponseReasoningItem {
+  const allowed = new Set<keyof ResponseReasoningItem>([
+    "type", "id", "summary", "content", "encrypted_content", "status",
+  ]);
+  const invalid = () => new RequestValidationError("Invalid reasoning item");
+  if (Object.keys(item).some((key) => !allowed.has(key as keyof ResponseReasoningItem)) ||
+      item.type !== "reasoning" || typeof item.id !== "string" || item.id.length > MAX_TEXT_LENGTH) {
+    throw invalid();
+  }
+  function parts<T extends "summary_text" | "reasoning_text">(
+    value: unknown, type: T
+  ): { type: T; text: string }[] {
+    if (!Array.isArray(value) || value.length > 100) throw invalid();
+    return value.map((part: unknown) => {
+      if (!object(part) || Object.keys(part).some((key) => key !== "type" && key !== "text") ||
+          part.type !== type || typeof part.text !== "string" || part.text.length > MAX_TEXT_LENGTH) {
+        throw invalid();
+      }
+      return { type, text: part.text };
+    });
+  }
+  const result: ResponseReasoningItem = {
+    type: "reasoning", id: item.id, summary: parts(item.summary, "summary_text"),
+  };
+  if (item.content !== undefined) result.content = parts(item.content, "reasoning_text");
+  if (item.encrypted_content !== undefined) {
+    // Opaque ciphertext can exceed the message text limit; the body remains capped at 256 KiB.
+    if (item.encrypted_content !== null &&
+        (typeof item.encrypted_content !== "string" || item.encrypted_content.length > MAX_REQUEST_BYTES)) {
+      throw invalid();
+    }
+    result.encrypted_content = item.encrypted_content;
+  }
+  if (item.status !== undefined) {
+    if (item.status !== "in_progress" && item.status !== "completed" && item.status !== "incomplete") {
+      throw invalid();
+    }
+    result.status = item.status;
+  }
+  return result;
+}
+
 export function validateResponsesRequest(value: unknown): ElevenLabsResponsesRequest {
   if (!object(value)) throw new RequestValidationError("Body must be an object");
   const allowed = new Set([
@@ -77,7 +120,7 @@ export function validateResponsesRequest(value: unknown): ElevenLabsResponsesReq
   // Agents may send instructions. Validate their size, but keep our own instructions.
   if (value.instructions !== undefined && value.instructions !== null) text(value.instructions);
 
-  let input: ConversationMessage[];
+  let input: ElevenLabsResponsesRequest["input"];
   if (typeof value.input === "string") {
     input = [{ role: "user", content: text(value.input) }];
   } else {
@@ -86,6 +129,10 @@ export function validateResponsesRequest(value: unknown): ElevenLabsResponsesReq
     }
     input = [];
     for (const item of value.input as unknown[]) {
+      if (object(item) && item.type === "reasoning") {
+        input.push(reasoningItem(item));
+        continue;
+      }
       if (!object(item) || (item.type !== undefined && item.type !== "message")) {
         const safeType = object(item) && typeof item.type === "string" && SAFE_INPUT_ITEM_TYPES.has(item.type)
           ? item.type
@@ -102,7 +149,7 @@ export function validateResponsesRequest(value: unknown): ElevenLabsResponsesReq
       }
     }
   }
-  if (!input.some((item) => item.role === "user" && item.content.trim())) {
+  if (!input.some((item) => "role" in item && item.role === "user" && item.content.trim())) {
     throw new RequestValidationError("Input must include a non-empty user message");
   }
 

@@ -141,7 +141,6 @@ for (const [changes, message] of [
 }
 
 for (const [name, item, safeType] of [
-  ["reasoning", { type: "reasoning" }, "reasoning"],
   ["function call", { type: "function_call" }, "function_call"],
   ["item reference", { type: "item_reference" }, "item_reference"],
   ["missing type on null", null, "unknown"],
@@ -176,6 +175,90 @@ test("messages without a type remain accepted", async () => {
   assert.deepEqual(h.warnings, []);
   await response.body.cancel();
 });
+
+const reasoning = {
+  type: "reasoning", id: "PRIVATE_REASONING_ID",
+  summary: [{ type: "summary_text", text: "PRIVATE_SUMMARY" }],
+  content: [{ type: "reasoning_text", text: "PRIVATE_REASONING_TEXT" }],
+  encrypted_content: "PRIVATE_CIPHERTEXT", status: "completed",
+};
+
+test("multiple turns preserve returned reasoning and server configuration", async () => {
+  const completed = { ...events.at(-1), response: {
+    ...events.at(-1).response, output: [reasoning],
+  } };
+  const h = createHarness({ create: () => source([completed]) });
+  const route = h.load(routePath);
+  const first = await route.POST(request());
+  assert.equal(first.status, 200);
+  const returned = parseSSE(await first.text())[0].response.output[0];
+  assert.deepEqual(returned, reasoning);
+  const input = [
+    { role: "user", content: "Question" }, returned,
+    { role: "assistant", content: "Earlier answer" },
+    { role: "user", content: "Next question" },
+  ];
+  const next = await route.POST(request({ ...valid, input, instructions: "PRIVATE_OVERRIDE" }));
+  assert.equal(next.status, 200);
+  await next.text();
+  assert.deepEqual(copy(h.calls[1].params.input), input);
+  for (const { params } of h.calls) {
+    assert.equal(params.model, "gpt-5.6");
+    assert.equal(params.instructions, h.load("lib/server/consultant/prompt.ts").consultantInstructions);
+    assert.deepEqual(copy(params.tools), [{ type: "file_search", vector_store_ids: ["test-only-store"] }]);
+    assert.equal(params.store, false);
+    assert.equal(params.stream, true);
+  }
+  assert.deepEqual(h.warnings, []);
+});
+
+for (const item of [
+  { type: "reasoning", id: "rs_test", summary: [] },
+  { type: "reasoning", id: "rs_test", summary: [], encrypted_content: null },
+  { ...reasoning, status: "in_progress" },
+  { ...reasoning, status: "incomplete", encrypted_content: "x".repeat(10001) },
+]) {
+  test("SDK reasoning optional fields are preserved", async () => {
+    const h = createHarness({ create: () => source(events) });
+    const response = await h.load(routePath).POST(request({ ...valid, input: [
+      { role: "user", content: "Question" }, item,
+    ] }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(copy(h.calls[0].params.input[1]), item);
+    assert.deepEqual(h.warnings, []);
+    await response.body.cancel();
+  });
+}
+
+for (const [name, changes] of [
+  ["missing id", { id: undefined }], ["numeric id", { id: 123 }],
+  ["missing summary", { summary: undefined }], ["null summary", { summary: null }],
+  ["invalid summary type", { summary: [{ type: "output_text", text: "PRIVATE_TEXT" }] }],
+  ["invalid summary text", { summary: [{ type: "summary_text", text: {} }] }],
+  ["extra summary fields", { summary: [{ type: "summary_text", text: "", instructions: "PRIVATE_OVERRIDE" }] }],
+  ["invalid content", { content: null }],
+  ["invalid content type", { content: [{ type: "summary_text", text: "PRIVATE_TEXT" }] }],
+  ["extra content fields", { content: [{ type: "reasoning_text", text: "", tools: [] }] }],
+  ["invalid encryption", { encrypted_content: {} }],
+  ["invalid status", { status: "PRIVATE_STATUS" }],
+  ["long summary", { summary: [{ type: "summary_text", text: "x".repeat(10001) }] }],
+  ["too many parts", { summary: Array.from({ length: 101 }, () => ({ type: "summary_text", text: "" })) }],
+  ...["model", "instructions", "tools", "vector_store_ids", "system", "role"].map(
+    (key) => ["injected " + key, { [key]: "PRIVATE_OVERRIDE" }]
+  ),
+]) {
+  test(`malformed reasoning rejected safely: ${name}`, async () => {
+    const h = createHarness();
+    const response = await h.load(routePath).POST(request({ ...valid, input: [
+      { role: "user", content: "PRIVATE_QUESTION" }, { ...reasoning, ...changes },
+    ] }));
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: { message: "Invalid reasoning item" } });
+    assert.deepEqual(copy(h.warnings), [[{ message: "Invalid reasoning item", status: 400 }]]);
+    assert.equal(h.calls.length, 0);
+    assert.ok(!JSON.stringify(h.warnings).includes("PRIVATE_"));
+  });
+}
 
 test("normalized context uses only our model, instructions and file_search", async () => {
   const h = createHarness({ create: () => source(events) });
