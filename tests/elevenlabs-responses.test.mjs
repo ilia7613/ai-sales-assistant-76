@@ -255,6 +255,14 @@ for (const [name, stream] of [
     assert.ok(!body.includes(upstreamDetail));
     assert.ok(!body.includes("response.completed"));
     assert.ok(["error", "response.failed"].includes(parseSSE(body).at(-1).type));
+    const expectedWarning = {
+      "upstream exception": { stage: "sse_iterator", name: "Error" },
+      "premature EOF": { stage: "sse", eventType: "unexpected_eof" },
+      "error event": { stage: "sse", eventType: "error", sequence_number: 0 },
+      "failed response": { stage: "sse", eventType: "response.failed", sequence_number: 0 },
+    }[name];
+    assert.deepEqual(copy(h.warnings), [[expectedWarning]]);
+    assert.ok(!JSON.stringify(h.warnings).includes("PRIVATE_"));
   });
 }
 
@@ -262,7 +270,64 @@ test("response.incomplete remains incomplete", async () => {
   const event = { type: "response.incomplete", sequence_number: 0, response: { id: "resp_test", status: "incomplete", error: null, incomplete_details: { reason: "max_output_tokens" } } };
   const h = createHarness({ create: () => source([event]) });
   assert.deepEqual(parseSSE(await (await h.load(routePath).POST(request())).text()), [event]);
+  assert.deepEqual(copy(h.warnings), [[{ stage: "sse", eventType: "response.incomplete", sequence_number: 0 }]]);
 });
+
+for (const eventType of ["error", "response.failed", "response.incomplete"]) {
+  test(`SSE diagnostics include safe code before sanitization: ${eventType}`, async () => {
+    const error = { code: "rate_limit_exceeded", message: "PRIVATE_PROVIDER_MESSAGE" };
+    const event = eventType === "error"
+      ? { type: eventType, sequence_number: 7, ...error, param: "PRIVATE_PARAM" }
+      : { type: eventType, sequence_number: 7, response: {
+          id: "PRIVATE_RESPONSE_ID", error, instructions: "PRIVATE_INSTRUCTIONS",
+        } };
+    const h = createHarness({ create: () => source([event]) });
+    const response = await h.load(routePath).POST(request());
+    assert.equal(response.status, 200);
+    const wireEvents = parseSSE(await response.text());
+    assert.equal(wireEvents[0].type, eventType);
+    assert.equal(eventType === "error" ? wireEvents[0].code : wireEvents[0].response.error.code, "server_error");
+    assert.deepEqual(copy(h.warnings), [[{ stage: "sse", eventType, code: "rate_limit_exceeded", sequence_number: 7 }]]);
+    assert.ok(!JSON.stringify(h.warnings).includes("PRIVATE_"));
+  });
+}
+
+test("SSE diagnostics omit unsafe code and nonnumeric sequence", async () => {
+  const h = createHarness({ create: () => source([{
+    type: "error", code: "private_customer_name", sequence_number: "PRIVATE_SEQUENCE",
+    message: "PRIVATE_PROVIDER_MESSAGE", param: "PRIVATE_PARAM",
+  }]) });
+  await (await h.load(routePath).POST(request())).text();
+  assert.deepEqual(copy(h.warnings), [[{ stage: "sse", eventType: "error" }]]);
+});
+
+for (const [name, failure, expected] of [
+  ["SDK APIError", new OpenAI.APIError(429, { code: "rate_limit_exceeded", message: "PRIVATE_PROVIDER_MESSAGE" }, undefined,
+    new Headers({ "x-request-id": "PRIVATE_REQUEST_ID" })),
+    { stage: "sse_iterator", name: "APIError", status: 429, code: "rate_limit_exceeded" }],
+  ["unsafe fields", { name: "PRIVATE_NAME", status: "PRIVATE_STATUS", code: "PRIVATE_CODE",
+    message: "PRIVATE_MESSAGE", stack: "PRIVATE_STACK", body: "PRIVATE_BODY" },
+    { stage: "sse_iterator", name: "UnknownError" }],
+  ["arbitrary short code", { name: "Error", code: "customer_name" },
+    { stage: "sse_iterator", name: "Error" }],
+  ["long code", { name: "Error", code: "x".repeat(100) },
+    { stage: "sse_iterator", name: "Error" }],
+  ["primitive error", "PRIVATE_THROWN_STRING", { stage: "sse_iterator", name: "UnknownError" }],
+]) {
+  test(`iterator diagnostics expose only safe metadata: ${name}`, async () => {
+    const h = createHarness({ create: () => ({
+      controller: new AbortController(),
+      async *[Symbol.asyncIterator]() { yield events[0]; throw failure; },
+    }) });
+    const response = await h.load(routePath).POST(request());
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(parseSSE(body).at(-1).type, "error");
+    assert.ok(!body.includes("PRIVATE_"));
+    assert.deepEqual(copy(h.warnings), [[expected]]);
+    assert.ok(!JSON.stringify(h.warnings).includes("PRIVATE_"));
+  });
+}
 
 test("downstream cancellation aborts OpenAI", async () => {
   const upstream = source(events);
