@@ -140,6 +140,43 @@ for (const [changes, message] of [
   });
 }
 
+for (const [name, item, safeType] of [
+  ["reasoning", { type: "reasoning" }, "reasoning"],
+  ["function call", { type: "function_call" }, "function_call"],
+  ["item reference", { type: "item_reference" }, "item_reference"],
+  ["missing type on null", null, "unknown"],
+  ["missing type on array", [], "unknown"],
+  ["string item", "PRIVATE_ITEM_TEST_MARKER", "unknown"],
+  ["null type", { type: null }, "unknown"],
+  ["numeric type", { type: 123 }, "unknown"],
+  ["object type", { type: { text: "PRIVATE_TYPE_TEST_MARKER" } }, "unknown"],
+  ["arbitrary type", { type: "private_customer_name" }, "unknown"],
+  ["newline in type", { type: "reasoning\nPRIVATE_TYPE_TEST_MARKER" }, "unknown"],
+]) {
+  test(`non-message diagnostic exposes only safe type: ${name}`, async () => {
+    const h = createHarness();
+    const candidate = item && !Array.isArray(item) && typeof item === "object"
+      ? { ...item, content: "PRIVATE_CONTENT_TEST_MARKER", text: "PRIVATE_TEXT_TEST_MARKER",
+          arguments: "PRIVATE_ARGUMENTS_TEST_MARKER", id: "PRIVATE_ID_TEST_MARKER",
+          role: "PRIVATE_ROLE_TEST_MARKER", headers: { Authorization: "PRIVATE_AUTH_TEST_MARKER" } }
+      : item;
+    const response = await h.load(routePath).POST(request({ ...valid, input: [candidate] }));
+    const message = `Unsupported input item type: ${safeType}`;
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: { message } });
+    assert.deepEqual(copy(h.warnings), [[{ message, status: 400 }]]);
+    assert.equal(h.calls.length, 0);
+  });
+}
+
+test("messages without a type remain accepted", async () => {
+  const h = createHarness({ create: () => source(events) });
+  const response = await h.load(routePath).POST(request({ ...valid, input: [{ role: "user", content: "Question" }] }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(h.warnings, []);
+  await response.body.cancel();
+});
+
 test("normalized context uses only our model, instructions and file_search", async () => {
   const h = createHarness({ create: () => source(events) });
   const response = await h.load(routePath).POST(request({

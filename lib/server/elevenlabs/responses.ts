@@ -7,6 +7,17 @@ const MAX_MESSAGES = 100;
 const MAX_TEXT_LENGTH = 10_000;
 const MAX_OUTPUT_TOKENS = 4096;
 
+// Diagnostic labels only; these items remain rejected by the validator.
+const SAFE_INPUT_ITEM_TYPES = new Set([
+  "reasoning", "item_reference", "file_search_call", "web_search_call",
+  "function_call", "function_call_output", "computer_call", "computer_call_output",
+  "tool_search_call", "tool_search_output", "additional_tools", "compaction",
+  "image_generation_call", "code_interpreter_call", "local_shell_call", "local_shell_call_output",
+  "shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output",
+  "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "mcp_call",
+  "custom_tool_call", "custom_tool_call_output", "compaction_trigger", "program", "program_output",
+]);
+
 export class RequestValidationError extends Error {
   constructor(message: string, public readonly status = 400) {
     super(message);
@@ -76,7 +87,10 @@ export function validateResponsesRequest(value: unknown): ElevenLabsResponsesReq
     input = [];
     for (const item of value.input as unknown[]) {
       if (!object(item) || (item.type !== undefined && item.type !== "message")) {
-        throw new RequestValidationError("Only message input items are supported");
+        const safeType = object(item) && typeof item.type === "string" && SAFE_INPUT_ITEM_TYPES.has(item.type)
+          ? item.type
+          : "unknown";
+        throw new RequestValidationError(`Unsupported input item type: ${safeType}`);
       }
       if (typeof item.role !== "string" || !["user", "assistant", "system", "developer"].includes(item.role)) {
         throw new RequestValidationError("Unsupported message role");
